@@ -33,6 +33,7 @@
     ripgrep
     tmux
     vim
+    gh
   ];
 
   programs.git = {

@@ -40,7 +40,7 @@ mount -t overlay overlay \
   -o "lowerdir=/nix-base,upperdir=$NIX_UPPER,workdir=$NIX_WORK" \
   /nix
 
-# Nix daemon — required for `nix` CLI commands (home-manager switch, etc.)
+# Nix daemon
 nix-daemon &
 DAEMON_PIDS+=($!)
 while [ ! -S /nix/var/nix/daemon-socket/socket ]; do sleep 0.05; done
@@ -60,48 +60,68 @@ while IFS=$'\t' read -r name uid; do
 
   mount --bind "$persist" "$home"
 
-  hm_gen="$home/.local/state/nix/profiles/home-manager"
   hm_profiles="$home/.local/state/nix/profiles"
   hm_gcroots="$home/.local/state/home-manager/gcroots"
   activation=$(jq -r --arg u "$name" '.[$u]' /etc/activations.json)
 
   run_as_user "$name" mkdir -p "$hm_profiles" "$hm_gcroots"
 
-  if [ -L "$hm_gen" ] && [ -e "$hm_gen/activate" ]; then
-    run_as_user "$name" "$hm_gen/activate" \
-      || echo "Warning: Home Manager re-activation failed for $name" >&2
+  # Check if user's nixcfg has been modified and userRebuild is enabled
+  user_modified=false
+  user_rebuild=$(jq -r '.userRebuild // true' /etc/entrypoint.json)
+  if [ "$user_rebuild" = "true" ]; then
+    for f in flake.nix flake.lock home.nix system.nix users.nix; do
+      if ! cmp -s "$home/.nixcfg/$f" "/etc/nixcfg/$f" 2>/dev/null; then
+        user_modified=true
+        break
+      fi
+    done
+  fi
+
+  if [ "$user_modified" = true ]; then
+    # Activate image default first so home-manager is on PATH, then rebuild
+    if [ -n "$activation" ] && [ "$activation" != "null" ]; then
+      run_as_user "$name" "$activation/activate" 2>/dev/null || true
+    fi
+    echo "Rebuilding Home Manager from user config for $name..." >&2
+    run_as_user "$name" bash -c 'cd ~/.nixcfg && home-manager switch --flake .' \
+      || echo "Warning: Home Manager rebuild failed for $name, using image default" >&2
   elif [ -n "$activation" ] && [ "$activation" != "null" ]; then
     run_as_user "$name" "$activation/activate" \
-      || echo "Warning: Home Manager initial activation failed for $name" >&2
+      || echo "Warning: Home Manager activation failed for $name" >&2
   fi
 
   # Ensure openclaw state dir exists and is owned by the user.
-  # openclaw.json config and credentials live here on the persistent volume.
   run_as_user "$name" mkdir -p "$home/.openclaw/logs" "$home/.openclaw/workspace"
-
-  # Install/repair per-user skill symlinks into ~/.agents/skills and
-  # ensure ~/.claude/skills and ~/.openclaw/skills alias into it.
-  bash /etc/setup-skills.sh "$name" "$uid"
 
 done < <(jq -r '.[] | [.name, .uid] | @tsv' /etc/users.json)
 
-# Application daemons (background services declared in system.nix)
+# Application daemons
+# user: "*" = all users, ["a","b"] = listed users, "name" = single user, omitted = root
 while IFS= read -r daemon; do
   readarray -t cmd < <(echo "$daemon" | jq -r '.command[]')
-  daemon_user=$(echo "$daemon" | jq -r '.user // empty')
+  user_field=$(echo "$daemon" | jq -c '.user // empty')
 
-  if [ -n "$daemon_user" ]; then
-    run_as_user "$daemon_user" "${cmd[@]}" &
+  if [ "$user_field" = '"*"' ]; then
+    while IFS=$'\t' read -r name uid; do
+      run_as_user "$name" "${cmd[@]}" &
+      DAEMON_PIDS+=($!)
+    done < <(jq -r '.[] | [.name, .uid] | @tsv' /etc/users.json)
+  elif echo "$daemon" | jq -e '.user | type == "array"' >/dev/null 2>&1; then
+    while IFS= read -r name; do
+      run_as_user "$name" "${cmd[@]}" &
+      DAEMON_PIDS+=($!)
+    done < <(echo "$daemon" | jq -r '.user[]')
+  elif [ -n "$user_field" ] && [ "$user_field" != '""' ]; then
+    run_as_user "$(echo "$daemon" | jq -r '.user')" "${cmd[@]}" &
+    DAEMON_PIDS+=($!)
   else
     "${cmd[@]}" &
+    DAEMON_PIDS+=($!)
   fi
-  DAEMON_PIDS+=($!)
 done < <(jq -c '.[]' /etc/daemons.json)
 
-# Foreground entrypoint — the openclaw gateway.
-# It is the long-running process that keeps the container alive.
-# Fly.io health checks against internal_port 18789; the gateway must be
-# listening on 0.0.0.0:18789 before the health check passes.
+# Foreground entrypoint
 ep_user=$(jq -r '.user' /etc/entrypoint.json)
 readarray -t ep_cmd < <(jq -r '.command[]' /etc/entrypoint.json)
 

@@ -11,16 +11,6 @@
     shellAliases = {
       ll = "ls -la";
       rebuild = "cd ~/.nixcfg && home-manager switch --flake .";
-      # Tail the gateway log (openclaw writes to ~/.openclaw/logs/ by default)
-      gw-logs = "tail -f ~/.openclaw/logs/gateway.log 2>/dev/null || journalctl --user -u openclaw-gateway -f";
-    };
-    # Enable Nix mode so openclaw skips auto-install/self-mutation flows.
-    sessionVariables = {
-      OPENCLAW_NIX_MODE = "1";
-      # State and config live on the persistent /data volume (see entrypoint.sh).
-      # These are set here as fallbacks; the entrypoint exports them explicitly.
-      OPENCLAW_STATE_DIR = "/data/homes/user/.openclaw";
-      OPENCLAW_CONFIG_PATH = "/data/homes/user/.openclaw/openclaw.json";
     };
   };
 
@@ -35,6 +25,19 @@
     vim
     gh
   ];
+
+  programs.openclaw = {
+    enable = true;
+    package = pkgs.openclaw-gateway;
+    systemd.enable = false;
+    config = {
+      gateway = {
+        mode = "local";
+        bind = "lan";
+        port = 3000;
+      };
+    };
+  };
 
   programs.git = {
     enable = true;

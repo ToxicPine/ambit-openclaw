@@ -1,4 +1,4 @@
-{ pkgs, pkgs-unstable, openclaw-gateway, ... }:
+{ pkgs, ... }:
 
 {
   imageName = "openclaw";
@@ -40,6 +40,5 @@
     nix
     nodejs_22
     util-linux
-    openclaw-gateway
   ];
 }

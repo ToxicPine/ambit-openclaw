@@ -23,12 +23,14 @@
     inputs@{ flake-parts, ... }:
     let
       system = "x86_64-linux";
-      pkgs = inputs.nixpkgs.legacyPackages.${system};
+      pkgs = import inputs.nixpkgs {
+        inherit system;
+        overlays = [ inputs.nix-openclaw.overlays.default ];
+      };
       pkgs-unstable = inputs.nixpkgs-unstable.legacyPackages.${system};
-      openclaw-gateway = inputs.nix-openclaw.packages.${system}.openclaw-gateway;
 
       users = import ./users.nix;
-      sysConfig = import ./system.nix { inherit pkgs pkgs-unstable openclaw-gateway; };
+      sysConfig = import ./system.nix { inherit pkgs; };
 
       # Daemon command args are either:
       #   path  (./lib/foo.sh) — file baked into store as executable script
@@ -74,6 +76,7 @@
           inherit pkgs;
           extraSpecialArgs = { inherit pkgs-unstable; };
           modules = [
+            inputs.nix-openclaw.homeManagerModules.openclaw
             ./home.nix
             {
               home.username = username;

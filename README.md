@@ -5,7 +5,11 @@ An [Ambit](https://github.com/cardelli/ambit) template that deploys your persona
 ```bash
 ambit create lab
 ambit deploy openclaw.lab --template ToxicPine/ambit-openclaw
-fly secrets set OPENCLAW_GATEWAY_TOKEN=$(openssl rand -hex 32)
+FLY_APP=$(npx @cardelli/ambit status app openclaw.lab --json --org personal | jq -r '.flyAppName')
+export OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)"
+grep -q "OPENCLAW_GATEWAY_TOKEN" ~/.bashrc && sed -i '/OPENCLAW_GATEWAY_TOKEN/d' ~/.bashrc
+echo "export OPENCLAW_GATEWAY_TOKEN='$OPENCLAW_GATEWAY_TOKEN'" >> ~/.bashrc
+fly secrets set OPENCLAW_GATEWAY_TOKEN="$OPENCLAW_GATEWAY_TOKEN" --app "$FLY_APP"
 ```
 
 Then open `http://openclaw.lab:18789` on any Tailscale-connected device.

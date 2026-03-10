@@ -37,6 +37,7 @@
         port = 3000;
         controlUi = {
           dangerouslyAllowHostHeaderOriginFallback = true;
+          allowInsecureAuth = true;
         };
       };
     };

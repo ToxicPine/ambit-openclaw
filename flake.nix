@@ -16,7 +16,7 @@
       url = "github:nix-community/home-manager/release-25.11";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    nix-openclaw.url = "github:openclaw/nix-openclaw";
+    nix-openclaw.url = "github:openclaw/nix-openclaw/17cb7d4b39a8c152c74a4dd79baaea9370e9c629";
   };
 
   outputs =

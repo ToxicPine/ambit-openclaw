@@ -35,6 +35,9 @@
         mode = "local";
         bind = "lan";
         port = 3000;
+        controlUi = {
+          dangerouslyAllowHostHeaderOriginFallback = true;
+        };
       };
     };
   };

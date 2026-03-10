@@ -42,6 +42,9 @@
     };
   };
 
+  # Force overwrite openclaw.json if it already exists on the persistent volume.
+  home.file.".openclaw/openclaw.json".force = true;
+
   programs.git = {
     enable = true;
   };

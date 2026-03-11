@@ -252,17 +252,23 @@ const html = `<!DOCTYPE html>
       saveBtn.disabled = locked || !dirty;
     }
 
-    let rebuildPoll = null;
+    let statusPoll = null;
 
-    function pollRebuild() {
-      if (rebuildPoll) return;
-      rebuildPoll = setInterval(async () => {
+    function pollStatus() {
+      if (statusPoll) return;
+      statusPoll = setInterval(async () => {
         try {
-          const r = await fetch("/api/rebuild-status");
+          const r = await fetch("/api/status");
           const s = await r.json();
-          if (s.status === "done") {
-            clearInterval(rebuildPoll);
-            rebuildPoll = null;
+          if (s.phase === "checking") {
+            setBadge("Checking...", "checking");
+          } else if (s.phase === "rebuilding") {
+            setEditorLocked(false);
+            setBadge("Rebuilding...", "building");
+          } else if (s.phase === "done") {
+            clearInterval(statusPoll);
+            statusPoll = null;
+            setEditorLocked(false);
             if (s.ok) {
               setBadge("OK", "ok");
               toast("Rebuild Complete");
@@ -271,6 +277,10 @@ const html = `<!DOCTYPE html>
               toast("Rebuild Failed: " + (s.error || "Unknown"), "err", 6000);
             }
             clearBadge(5000);
+          } else {
+            clearInterval(statusPoll);
+            statusPoll = null;
+            setEditorLocked(false);
           }
         } catch { /* ignore */ }
       }, 2000);
@@ -306,7 +316,7 @@ const html = `<!DOCTYPE html>
         setDirty(false);
         setBadge("Rebuilding...", "building");
         toast("Saved");
-        pollRebuild();
+        pollStatus();
       } catch (e) {
         setEditorLocked(false);
         setBadge("Error", "err");
@@ -365,11 +375,31 @@ const html = `<!DOCTYPE html>
     window.addEventListener("beforeunload", e => {
       if (dirty) { e.preventDefault(); e.returnValue = ""; }
     });
+
+    // Hydrate status from server on load
+    (async () => {
+      try {
+        const r = await fetch("/api/status");
+        const s = await r.json();
+        if (s.phase === "checking") {
+          setEditorLocked(true);
+          setBadge("Checking...", "checking");
+          pollStatus();
+        } else if (s.phase === "rebuilding") {
+          setBadge("Rebuilding...", "building");
+          pollStatus();
+        } else if (s.phase === "done") {
+          if (s.ok) { setBadge("OK", "ok"); }
+          else { setBadge("Error", "err"); }
+          clearBadge(5000);
+        }
+      } catch { /* ignore */ }
+    })();
   </script>
 </body>
 </html>`;
 
-let rebuild = { status: "idle" as "idle" | "running" | "done", ok: true, error: "" };
+let pipeline = { phase: "idle" as "idle" | "checking" | "rebuilding" | "done", ok: true, error: "" };
 let nextRebuild: PromiseWithResolvers<void> | null = null;
 
 async function rebuildLoop() {
@@ -379,7 +409,7 @@ async function rebuildLoop() {
     await gate.promise;
     nextRebuild = null;
 
-    rebuild = { status: "running", ok: true, error: "" };
+    pipeline = { phase: "rebuilding", ok: true, error: "" };
     try {
       const cmd = new Deno.Command("home-manager", {
         args: ["switch", "--flake", nixcfgDir],
@@ -389,14 +419,15 @@ async function rebuildLoop() {
       });
       const out = await cmd.output();
       if (out.success) {
-        rebuild = { status: "done", ok: true, error: "" };
+        pipeline = { phase: "done", ok: true, error: "" };
       } else {
         const stderr = new TextDecoder().decode(out.stderr);
-        rebuild = { status: "done", ok: false, error: stderr.slice(-500) };
+        pipeline = { phase: "done", ok: false, error: stderr.slice(-500) };
       }
     } catch (e) {
-      rebuild = { status: "done", ok: false, error: e instanceof Error ? e.message : String(e) };
+      pipeline = { phase: "done", ok: false, error: e instanceof Error ? e.message : String(e) };
     }
+    setTimeout(() => { if (pipeline.phase === "done") pipeline = { phase: "idle", ok: true, error: "" }; }, 30000);
   }
 }
 
@@ -431,11 +462,12 @@ Deno.serve({ port }, async (req: Request) => {
   // POST save content — validate with nix eval in a temp copy, then save and rebuild
   if (url.pathname === "/api/content" && req.method === "POST") {
     let tmpDir: string | undefined;
+    pipeline = { phase: "checking", ok: true, error: "" };
     try {
       const body = await req.text();
 
       tmpDir = await Deno.makeTempDir();
-      const cp = new Deno.Command("cp", { args: ["-r", `${nixcfgDir}/.`, tmpDir] });
+      const cp = new Deno.Command("cp", { args: ["-r", "--no-preserve=mode", `${nixcfgDir}/.`, tmpDir] });
       await cp.output();
       await Deno.writeTextFile(`${tmpDir}/home.nix`, body);
 
@@ -455,14 +487,17 @@ Deno.serve({ port }, async (req: Request) => {
 
       if (!result.success) {
         const stderr = new TextDecoder().decode(result.stderr);
+        pipeline = { phase: "idle", ok: true, error: "" };
         return new Response(stderr.slice(-500).trim(), { status: 422 });
       }
 
       await Deno.writeTextFile(filePath, body);
+      pipeline = { phase: "rebuilding", ok: true, error: "" };
       scheduleRebuild();
 
       return new Response("ok");
     } catch (e) {
+      pipeline = { phase: "idle", ok: true, error: "" };
       const msg = e instanceof Error ? e.message : String(e);
       return new Response(msg, { status: 500 });
     } finally {
@@ -470,9 +505,9 @@ Deno.serve({ port }, async (req: Request) => {
     }
   }
 
-  // GET rebuild status
-  if (url.pathname === "/api/rebuild-status" && req.method === "GET") {
-    return new Response(JSON.stringify(rebuild), {
+  // GET pipeline status
+  if (url.pathname === "/api/status" && req.method === "GET") {
+    return new Response(JSON.stringify(pipeline), {
       headers: { "Content-Type": "application/json" },
     });
   }

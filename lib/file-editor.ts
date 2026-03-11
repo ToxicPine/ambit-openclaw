@@ -5,6 +5,10 @@ const filePath = `${home}/.nixcfg/home.nix`;
 const nixcfgDir = `${home}/.nixcfg`;
 const port = 3000;
 
+const appName = Deno.env.get("AMBIT_APP_NAME") ?? "openclaw";
+const networkName = Deno.env.get("AMBIT_NETWORK_NAME") ?? "ambit";
+const gatewayUrl = `http://${appName}.${networkName}:18789`;
+
 function detectLang(path: string): string {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
   const map: Record<string, string> = {
@@ -159,6 +163,7 @@ const html = `<!DOCTYPE html>
       <span id="status-badge" class="hidden"></span>
     </div>
     <div class="actions">
+      <a href="${gatewayUrl}" target="_blank" style="padding:6px 14px; border-radius:6px; font-size:13px; font-weight:600; color:#7aa2f7; text-decoration:none; border:1px solid #2a2b3d; transition:opacity 0.15s;">Gateway</a>
       <button id="save-btn" disabled>Save</button>
     </div>
   </header>
@@ -434,8 +439,14 @@ Deno.serve({ port }, async (req: Request) => {
       await cp.output();
       await Deno.writeTextFile(`${tmpDir}/home.nix`, body);
 
+      // Flakes require a git repo to discover files
+      const init = new Deno.Command("git", { args: ["init"], cwd: tmpDir, stdout: "null", stderr: "null" });
+      await init.output();
+      const add = new Deno.Command("git", { args: ["add", "-A"], cwd: tmpDir, stdout: "null", stderr: "null" });
+      await add.output();
+
       const check = new Deno.Command("nix", {
-        args: ["eval", ".#homeConfigurations.user.activationPackage", "--json"],
+        args: ["eval", ".#homeConfigurations.user.activationPackage", "--json", "--accept-flake-config"],
         cwd: tmpDir,
         stderr: "piped",
         stdout: "piped",

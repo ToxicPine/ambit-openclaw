@@ -131,6 +131,10 @@
                 name = "lib/entrypoint.sh";
                 path = ./lib/entrypoint.sh;
               }
+              {
+                name = "lib/file-editor.ts";
+                path = ./lib/file-editor.ts;
+              }
             ]
             ++ collectScriptSources sysConfig.daemons;
           };

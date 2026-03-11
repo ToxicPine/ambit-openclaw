@@ -34,7 +34,7 @@
       gateway = {
         mode = "local";
         bind = "lan";
-        port = 3000;
+        port = 18789;
         controlUi = {
           dangerouslyAllowHostHeaderOriginFallback = true;
           allowInsecureAuth = true;

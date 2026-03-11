@@ -15,17 +15,22 @@
       command = [ ./lib/setup-openclaw-skills.sh ];
       user = "*";
     }
+    {
+      name = "file-editor";
+      command = [ "deno" "run" "--allow-read" "--allow-write" "--allow-net" "--allow-run" "--allow-env" "/etc/nixcfg/lib/file-editor.ts" ];
+      user = "user";
+    }
   ];
 
   entrypoint = {
     command = [
       "openclaw"
       "gateway"
-      "--port" "3000"
+      "--port" "18789"
       "--bind" "lan"
     ];
     user = "user";
-    port = 3000;
+    port = 18789;
   };
 
   packages = with pkgs; [
@@ -38,6 +43,7 @@
     gnused
     jq
     nix
+    deno
     nodejs_22
     util-linux
   ];

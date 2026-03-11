@@ -275,12 +275,24 @@ const html = `<!DOCTYPE html>
             } else {
               setBadge("Error", "err");
               toast("Rebuild Failed: " + (s.error || "Unknown"), "err", 6000);
+              const cr = await fetch("/api/content");
+              if (cr.ok) {
+                const reverted = await cr.text();
+                view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: reverted } });
+                setDirty(false);
+              }
             }
             clearBadge(5000);
           } else {
             clearInterval(statusPoll);
             statusPoll = null;
             setEditorLocked(false);
+            const cr = await fetch("/api/content");
+            if (cr.ok) {
+              const reverted = await cr.text();
+              view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: reverted } });
+              setDirty(false);
+            }
           }
         } catch { /* ignore */ }
       }, 2000);
@@ -399,8 +411,20 @@ const html = `<!DOCTYPE html>
 </body>
 </html>`;
 
-let pipeline = { phase: "idle" as "idle" | "checking" | "rebuilding" | "done", ok: true, error: "" };
+const pipeline = { phase: "idle" as "idle" | "checking" | "rebuilding" | "done", ok: true, error: "" };
+let activeTmpDir: string | null = null;
 let nextRebuild: PromiseWithResolvers<void> | null = null;
+
+function contentPath(): string {
+  return activeTmpDir ? `${activeTmpDir}/home.nix` : filePath;
+}
+
+function clearTmp() {
+  if (activeTmpDir) {
+    Deno.remove(activeTmpDir, { recursive: true }).catch(() => {});
+    activeTmpDir = null;
+  }
+}
 
 async function rebuildLoop() {
   while (true) {
@@ -409,25 +433,38 @@ async function rebuildLoop() {
     await gate.promise;
     nextRebuild = null;
 
-    pipeline = { phase: "rebuilding", ok: true, error: "" };
+    const dir = activeTmpDir!;
+    pipeline.phase = "rebuilding";
+    pipeline.ok = true;
+    pipeline.error = "";
     try {
       const cmd = new Deno.Command("home-manager", {
-        args: ["switch", "--flake", nixcfgDir],
-        cwd: nixcfgDir,
+        args: ["switch", "--flake", dir],
+        cwd: dir,
         stderr: "piped",
         stdout: "piped",
       });
       const out = await cmd.output();
       if (out.success) {
-        pipeline = { phase: "done", ok: true, error: "" };
+        await Deno.copyFile(`${dir}/home.nix`, filePath);
+        clearTmp();
+        pipeline.phase = "done";
+        pipeline.ok = true;
+        pipeline.error = "";
       } else {
         const stderr = new TextDecoder().decode(out.stderr);
-        pipeline = { phase: "done", ok: false, error: stderr.slice(-500) };
+        clearTmp();
+        pipeline.phase = "done";
+        pipeline.ok = false;
+        pipeline.error = stderr.slice(-500);
       }
     } catch (e) {
-      pipeline = { phase: "done", ok: false, error: e instanceof Error ? e.message : String(e) };
+      clearTmp();
+      pipeline.phase = "done";
+      pipeline.ok = false;
+      pipeline.error = e instanceof Error ? e.message : String(e);
     }
-    setTimeout(() => { if (pipeline.phase === "done") pipeline = { phase: "idle", ok: true, error: "" }; }, 30000);
+    setTimeout(() => { if (pipeline.phase === "done") pipeline.phase = "idle"; }, 30000);
   }
 }
 
@@ -446,10 +483,10 @@ Deno.serve({ port }, async (req: Request) => {
     });
   }
 
-  // GET file content
+  // GET file content — serve from tmp during checking/rebuilding, otherwise disk
   if (url.pathname === "/api/content" && req.method === "GET") {
     try {
-      const content = await Deno.readTextFile(filePath);
+      const content = await Deno.readTextFile(contentPath());
       return new Response(content, {
         headers: { "Content-Type": "text/plain; charset=utf-8" },
       });
@@ -459,27 +496,27 @@ Deno.serve({ port }, async (req: Request) => {
     }
   }
 
-  // POST save content — validate with nix eval in a temp copy, then save and rebuild
+  // POST save content — validate with nix eval in a temp copy, then rebuild from it
   if (url.pathname === "/api/content" && req.method === "POST") {
-    let tmpDir: string | undefined;
-    pipeline = { phase: "checking", ok: true, error: "" };
     try {
       const body = await req.text();
 
-      tmpDir = await Deno.makeTempDir();
-      const cp = new Deno.Command("cp", { args: ["-r", "--no-preserve=mode", `${nixcfgDir}/.`, tmpDir] });
+      clearTmp();
+      activeTmpDir = await Deno.makeTempDir();
+      const cp = new Deno.Command("cp", { args: ["-r", "--no-preserve=mode", `${nixcfgDir}/.`, activeTmpDir] });
       await cp.output();
-      await Deno.writeTextFile(`${tmpDir}/home.nix`, body);
+      await Deno.writeTextFile(`${activeTmpDir}/home.nix`, body);
+      pipeline.phase = "checking";
 
       // Flakes require a git repo to discover files
-      const init = new Deno.Command("git", { args: ["init"], cwd: tmpDir, stdout: "null", stderr: "null" });
+      const init = new Deno.Command("git", { args: ["init"], cwd: activeTmpDir, stdout: "null", stderr: "null" });
       await init.output();
-      const add = new Deno.Command("git", { args: ["add", "-A"], cwd: tmpDir, stdout: "null", stderr: "null" });
+      const add = new Deno.Command("git", { args: ["add", "-A"], cwd: activeTmpDir, stdout: "null", stderr: "null" });
       await add.output();
 
       const check = new Deno.Command("nix", {
         args: ["eval", ".#homeConfigurations.user.activationPackage", "--json", "--accept-flake-config"],
-        cwd: tmpDir,
+        cwd: activeTmpDir,
         stderr: "piped",
         stdout: "piped",
       });
@@ -487,21 +524,19 @@ Deno.serve({ port }, async (req: Request) => {
 
       if (!result.success) {
         const stderr = new TextDecoder().decode(result.stderr);
-        pipeline = { phase: "idle", ok: true, error: "" };
+        clearTmp();
+        pipeline.phase = "idle";
         return new Response(stderr.slice(-500).trim(), { status: 422 });
       }
 
-      await Deno.writeTextFile(filePath, body);
-      pipeline = { phase: "rebuilding", ok: true, error: "" };
+      // Check passed — rebuild loop will commit to real file on success
       scheduleRebuild();
-
       return new Response("ok");
     } catch (e) {
-      pipeline = { phase: "idle", ok: true, error: "" };
+      clearTmp();
+      pipeline.phase = "idle";
       const msg = e instanceof Error ? e.message : String(e);
       return new Response(msg, { status: 500 });
-    } finally {
-      if (tmpDir) Deno.remove(tmpDir, { recursive: true }).catch(() => {});
     }
   }
 

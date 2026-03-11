@@ -50,6 +50,7 @@
         port = 18789;
         controlUi = {
           dangerouslyAllowHostHeaderOriginFallback = true;
+          dangerouslyDisableDeviceAuth = true;
           allowInsecureAuth = true;
         };
       };

@@ -415,6 +415,15 @@ const pipeline = { phase: "idle" as "idle" | "checking" | "rebuilding" | "done",
 let activeTmpDir: string | null = null;
 let nextRebuild: PromiseWithResolvers<void> | null = null;
 
+function setPhase(phase: typeof pipeline.phase, ok = true, error = "") {
+  const prev = pipeline.phase;
+  pipeline.phase = phase;
+  pipeline.ok = ok;
+  pipeline.error = error;
+  if (ok) console.log(`[pipeline] ${prev} → ${phase}`);
+  else console.error(`[pipeline] ${prev} → ${phase}: ${error}`);
+}
+
 function contentPath(): string {
   return activeTmpDir ? `${activeTmpDir}/home.nix` : filePath;
 }
@@ -434,9 +443,7 @@ async function rebuildLoop() {
     nextRebuild = null;
 
     const dir = activeTmpDir!;
-    pipeline.phase = "rebuilding";
-    pipeline.ok = true;
-    pipeline.error = "";
+    setPhase("rebuilding");
     try {
       const cmd = new Deno.Command("home-manager", {
         args: ["switch", "--flake", dir],
@@ -448,23 +455,17 @@ async function rebuildLoop() {
       if (out.success) {
         await Deno.copyFile(`${dir}/home.nix`, filePath);
         clearTmp();
-        pipeline.phase = "done";
-        pipeline.ok = true;
-        pipeline.error = "";
+        setPhase("done");
       } else {
         const stderr = new TextDecoder().decode(out.stderr);
         clearTmp();
-        pipeline.phase = "done";
-        pipeline.ok = false;
-        pipeline.error = stderr.slice(-500);
+        setPhase("done", false, stderr.slice(-500));
       }
     } catch (e) {
       clearTmp();
-      pipeline.phase = "done";
-      pipeline.ok = false;
-      pipeline.error = e instanceof Error ? e.message : String(e);
+      setPhase("done", false, e instanceof Error ? e.message : String(e));
     }
-    setTimeout(() => { if (pipeline.phase === "done") pipeline.phase = "idle"; }, 30000);
+    setTimeout(() => { if (pipeline.phase === "done") setPhase("idle"); }, 30000);
   }
 }
 
@@ -506,7 +507,7 @@ Deno.serve({ port }, async (req: Request) => {
       const cp = new Deno.Command("cp", { args: ["-r", "--no-preserve=mode", `${nixcfgDir}/.`, activeTmpDir] });
       await cp.output();
       await Deno.writeTextFile(`${activeTmpDir}/home.nix`, body);
-      pipeline.phase = "checking";
+      setPhase("checking");
 
       // Flakes require a git repo to discover files
       const init = new Deno.Command("git", { args: ["init"], cwd: activeTmpDir, stdout: "null", stderr: "null" });
@@ -525,7 +526,8 @@ Deno.serve({ port }, async (req: Request) => {
       if (!result.success) {
         const stderr = new TextDecoder().decode(result.stderr);
         clearTmp();
-        pipeline.phase = "idle";
+        setPhase("idle");
+        console.error("[check] Validation failed:\n" + stderr.slice(-500).trim());
         return new Response(stderr.slice(-500).trim(), { status: 422 });
       }
 
@@ -534,8 +536,9 @@ Deno.serve({ port }, async (req: Request) => {
       return new Response("ok");
     } catch (e) {
       clearTmp();
-      pipeline.phase = "idle";
+      setPhase("idle");
       const msg = e instanceof Error ? e.message : String(e);
+      console.error("[save] Error:", msg);
       return new Response(msg, { status: 500 });
     }
   }

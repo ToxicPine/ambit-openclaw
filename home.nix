@@ -1,3 +1,16 @@
+# This is the configuration for the cloud computer that runs your OpenClaw
+# gateway. You can install packages, set up your shell, and tweak your
+# OpenClaw settings — all from this file.
+#
+# Hit Ctrl+S (or Cmd+S) to save. The editor checks your syntax and, if
+# everything looks good, automatically applies the changes.
+#
+# OpenClaw settings live under programs.openclaw.config — see the
+# nix-openclaw module for all available options:
+#   https://github.com/openclaw/nix-openclaw
+#
+# For everything else (packages, shell, git, etc.) see Home Manager:
+#   https://nix-community.github.io/home-manager/options.xhtml
 { pkgs, pkgs-unstable, ... }:
 
 {

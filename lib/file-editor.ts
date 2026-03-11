@@ -430,12 +430,8 @@ Deno.serve({ port }, async (req: Request) => {
       const body = await req.text();
 
       tmpDir = await Deno.makeTempDir();
-      for await (const entry of Deno.readDir(nixcfgDir)) {
-        if (entry.name === "home.nix") continue;
-        const src = `${nixcfgDir}/${entry.name}`;
-        const dst = `${tmpDir}/${entry.name}`;
-        await Deno.copyFile(src, dst);
-      }
+      const cp = new Deno.Command("cp", { args: ["-r", `${nixcfgDir}/.`, tmpDir] });
+      await cp.output();
       await Deno.writeTextFile(`${tmpDir}/home.nix`, body);
 
       const check = new Deno.Command("nix", {

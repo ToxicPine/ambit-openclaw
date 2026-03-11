@@ -68,7 +68,7 @@ while IFS=$'\t' read -r name uid; do
 
   # Check if user's nixcfg has been modified and userRebuild is enabled
   user_modified=false
-  user_rebuild=$(jq -r '.userRebuild // true' /etc/entrypoint.json)
+  user_rebuild=$(jq -r 'if .userRebuild == false then "false" else "true" end' /etc/entrypoint.json)
   if [ "$user_rebuild" = "true" ]; then
     for f in flake.nix flake.lock home.nix system.nix users.nix; do
       if ! cmp -s "$home/.nixcfg/$f" "/etc/nixcfg/$f" 2>/dev/null; then
